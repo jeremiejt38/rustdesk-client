@@ -1,0 +1,148 @@
+name: Build custom RustDesk Windows client
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'RustDesk version or branch to build'
+        required: true
+        default: 'master'
+        type: string
+      zip_url:
+        description: 'URL of the encrypted zip containing build secrets/config'
+        required: true
+        type: string
+      callback_url:
+        description: 'URL to POST build status updates'
+        required: true
+        type: string
+      callback_token:
+        description: 'Secret token for the callback endpoint'
+        required: true
+        type: string
+
+env:
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VERSION: "${{ inputs.version }}"
+  CALLBACK_URL: "${{ inputs.callback_url }}"
+  CALLBACK_TOKEN: "${{ inputs.callback_token }}"
+
+jobs:
+  build-windows:
+    name: Build Windows x64 custom client
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+    steps:
+      - name: Report start
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body (@{status="running"; log="Build started on windows-2022"} | ConvertTo-Json)
+        continue-on-error: true
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download and extract config
+        shell: pwsh
+        run: |
+          $zipPath = "$env:RUNNER_TEMP\secrets.zip"
+          Invoke-WebRequest -Uri "${{ inputs.zip_url }}" -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\secrets"
+          Get-ChildItem "$env:RUNNER_TEMP\secrets"
+
+      - name: Apply build configuration
+        shell: pwsh
+        run: |
+          $configPath = "$env:RUNNER_TEMP\secrets\build-config.json"
+          if (Test-Path $configPath) {
+            python build-config.py $configPath
+          } else {
+            Write-Host "No build-config.json found; skipping custom patches"
+          }
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "windows-2022"
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          export VCPKG_DEFAULT_HOST_TRIPLET=x64-windows-static
+          if ! $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed" libvpx libyuv opus aom; then
+            echo "vcpkg install failed"
+            exit 1
+          fi
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Flutter precache
+        run: flutter precache --windows
+
+      - name: Fix flutter_gpu_texture_renderer
+        shell: bash
+        run: |
+          sed -i -e 's|2ded7f146437a761ffe6981e2f742038f85ca68d|08a471bb8ceccdd50483c81cdfa8b81b07b14b87|' ./flutter/pubspec.lock
+          sed -i -e 's|2ded7f146437a761ffe6981e2f742038f85ca68d|08a471bb8ceccdd50483c81cdfa8b81b07b14b87|' ./flutter/pubspec.yaml
+
+      - name: Build RustDesk
+        shell: pwsh
+        run: |
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          mv .\flutter\build\windows\x64\runner\Release .\rustdesk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-custom-windows-x64
+          path: rustdesk/
+
+      - name: Report success
+        if: success()
+        shell: pwsh
+        run: |
+          $artifactUrl = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body (@{status="success"; external_url=$artifactUrl; log="Windows build completed"} | ConvertTo-Json)
+
+      - name: Report failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $log = "Windows build failed. See GitHub Actions logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body (@{status="failed"; log=$log} | ConvertTo-Json)

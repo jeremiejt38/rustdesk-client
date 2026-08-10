@@ -1,36 +1,22 @@
-#!/bin/sh
+#!/bin/bash
+set -e
 
-cd "$HOME"/rustdesk || exit 1
-# shellcheck source=/dev/null
-. "$HOME"/.cargo/env
-
-argv=$*
-
-while test $# -gt 0; do
-  case "$1" in
-  --release)
-    mkdir -p target/release
-    test -f target/release/libsciter-gtk.so || cp "$HOME"/libsciter-gtk.so target/release/
-    release=1
-    shift
-    ;;
-  --target)
-    shift
-    if test $# -gt 0; then
-      rustup target add "$1"
-      shift
-    fi
-    ;;
-  *)
-    shift
-    ;;
-  esac
-done
-
-if [ -z $release ]; then
-  mkdir -p target/debug
-  test -f target/debug/libsciter-gtk.so || cp "$HOME"/libsciter-gtk.so target/debug/
+if [ -z "$BUILD_CONFIG_URL" ]; then
+    echo "BUILD_CONFIG_URL is required"
+    exit 1
 fi
-set -f
-#shellcheck disable=2086
-VCPKG_ROOT=/vcpkg cargo build --locked $argv
+
+# Download build configuration
+curl -L -o /tmp/build-config.json "$BUILD_CONFIG_URL"
+
+# Apply configuration patches
+cd /home/user/rustdesk
+python3 build-config.py /tmp/build-config.json
+
+# Build Linux x64 Flutter binary
+# This is a simplified build command; full production build may require more flags
+python3 build.py --flutter --skip-portable-pack
+
+# Move artifact to a known location
+mkdir -p /opt/output
+find flutter/build/linux/x64/release/bundle -maxdepth 1 -type f -executable -name "rustdesk*" -exec cp {} /opt/output/ \;
