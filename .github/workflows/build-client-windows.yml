@@ -101,7 +101,7 @@ jobs:
         shell: bash
         run: |
           export VCPKG_DEFAULT_HOST_TRIPLET=x64-windows-static
-          if ! $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed" libvpx libyuv opus aom; then
+          if ! $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
             echo "vcpkg install failed"
             exit 1
           fi
