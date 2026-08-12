@@ -32,8 +32,12 @@ env:
   CALLBACK_TOKEN: "${{ inputs.callback_token }}"
 
 jobs:
+  bridge:
+    uses: ./.github/workflows/bridge.yml
+
   build-windows:
     name: Build Windows x64 custom client
+    needs: bridge
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -55,6 +59,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Download bridge artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
 
       - name: Download and extract config
         shell: pwsh
