@@ -9,7 +9,7 @@ on:
         default: 'master'
         type: string
       zip_url:
-        description: 'URL of the encrypted zip containing build secrets/config'
+        description: 'URL of the zip containing build secrets/config'
         required: true
         type: string
       callback_url:
@@ -45,7 +45,7 @@ jobs:
       - name: Report start
         shell: pwsh
         run: |
-          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body (@{status="running"; log="Build started on windows-2022"} | ConvertTo-Json)
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; error_log="Build started on windows-2022"} | ConvertTo-Json)
         continue-on-error: true
 
       - name: Export GitHub Actions cache environment variables
@@ -58,6 +58,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.version }}
           submodules: recursive
 
       - name: Download bridge artifact
@@ -79,6 +80,18 @@ jobs:
         run: |
           $configPath = "$env:RUNNER_TEMP\secrets\build-config.json"
           if (Test-Path $configPath) {
+            # Branding paths in the config are relative to the extracted zip
+            # directory; resolve them so build-config.py finds the files.
+            $secretsDir = "$env:RUNNER_TEMP\secrets"
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            foreach ($key in @('icon_path','logo_path','privacy_screen_path')) {
+              $rel = $cfg.branding.$key
+              if ($rel -and -not [IO.Path]::IsPathRooted($rel)) {
+                $abs = Join-Path $secretsDir $rel
+                if (Test-Path $abs) { $cfg.branding.$key = $abs }
+              }
+            }
+            $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath
             python build-config.py $configPath
           } else {
             Write-Host "No build-config.json found; skipping custom patches"
@@ -138,6 +151,7 @@ jobs:
           mv .\flutter\build\windows\x64\runner\Release .\rustdesk
 
       - name: Upload artifact
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-custom-windows-x64
@@ -147,12 +161,11 @@ jobs:
         if: success()
         shell: pwsh
         run: |
-          $artifactUrl = "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body (@{status="success"; external_url=$artifactUrl; log="Windows build completed"} | ConvertTo-Json)
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="success"; run_id="${{ github.run_id }}"; artifact_id="${{ steps.upload.outputs.artifact-id }}"; error_log="Windows build completed"} | ConvertTo-Json)
 
       - name: Report failure
         if: failure()
         shell: pwsh
         run: |
           $log = "Windows build failed. See GitHub Actions logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body (@{status="failed"; log=$log} | ConvertTo-Json)
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="failed"; run_id="${{ github.run_id }}"; error_log=$log} | ConvertTo-Json)
