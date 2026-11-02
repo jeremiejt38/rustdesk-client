@@ -175,6 +175,22 @@ jobs:
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           mv .\flutter\build\windows\x64\runner\Release .\rustdesk
 
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+      - name: Build MSI installer
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Building MSI installer"} | ConvertTo-Json) | Out-Null
+          pushd ./res/msi
+          python preprocess.py --arp -d ../../rustdesk
+          nuget restore msi.sln
+          msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+          $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
+          if (-not $msi) { throw "Package.msi not found" }
+          New-Item -ItemType Directory -Force -Path ../../msi-out | Out-Null
+          Copy-Item $msi.FullName ../../msi-out/rustdesk-custom-windows-x64-setup.msi
+
       - name: Report progress
         shell: pwsh
         run: |
@@ -186,7 +202,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-custom-windows-x64
-          path: rustdesk/
+          path: |
+            rustdesk/
+            msi-out/*.msi
 
       - name: Report success
         if: success()
