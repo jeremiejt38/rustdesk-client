@@ -104,6 +104,9 @@ jobs:
             Write-Host "No build-config.json found; skipping custom patches"
           }
 
+      - name: Verify build-config patcher
+        run: python tests/test_build_config.py
+
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
