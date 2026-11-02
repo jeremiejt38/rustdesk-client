@@ -19,7 +19,7 @@ def load_config(path: Path) -> dict:
 def patch_common_rs(root: Path, config: dict) -> None:
     conn = config.get("connection", {})
     common_rs = root / "src" / "common.rs"
-    text = common_rs.read_text()
+    text = common_rs.read_text(encoding="utf-8")
 
     replacements = {
         "const DEFAULT_HOST: &str = ": conn.get("server_id", "relay.akasha.ing"),
@@ -32,7 +32,7 @@ def patch_common_rs(root: Path, config: dict) -> None:
         pattern = re.compile(rf"({re.escape(prefix)}).+?;")
         text = pattern.sub(rf'\1"{value}";', text)
 
-    common_rs.write_text(text)
+    common_rs.write_text(text, encoding="utf-8")
 
 
 def patch_cargo_toml(root: Path, config: dict) -> None:
@@ -41,7 +41,7 @@ def patch_cargo_toml(root: Path, config: dict) -> None:
     company = branding.get("company_name", "Purslane Tech Pte. Ltd.")
 
     cargo_toml = root / "Cargo.toml"
-    text = cargo_toml.read_text()
+    text = cargo_toml.read_text(encoding="utf-8")
 
     text = re.sub(
         r'description = "RustDesk Remote Desktop"',
@@ -68,11 +68,11 @@ def patch_cargo_toml(root: Path, config: dict) -> None:
         f'LegalCopyright = "Copyright {company}. All rights reserved."',
         text,
     )
-    cargo_toml.write_text(text)
+    cargo_toml.write_text(text, encoding="utf-8")
 
     portable_cargo = root / "libs" / "portable" / "Cargo.toml"
     if portable_cargo.exists():
-        text = portable_cargo.read_text()
+        text = portable_cargo.read_text(encoding="utf-8")
         text = re.sub(
             r'description = "RustDesk Remote Desktop"',
             f'description = "{app_name}"',
@@ -88,14 +88,10 @@ def patch_cargo_toml(root: Path, config: dict) -> None:
             f'FileDescription = "{app_name}"',
             text,
         )
-        portable_cargo.write_text(text)
+        portable_cargo.write_text(text, encoding="utf-8")
 
 
 _VALID_CONN_TYPES = {"incoming", "outgoing"}
-# Keys that must never be baked as plain options: the permanent password is
-# handled by the hard_settings password/salt mechanism, not a raw option.
-_SKIP_OPTION_KEYS = {"password", "salt"}
-_OPTION_KEY_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 
 
 def _rust_string(value: str) -> str:
@@ -112,60 +108,47 @@ def _rust_map_literal(pairs: dict[str, str]) -> str:
     return f"RwLock::new(HashMap::from([{items}]))"
 
 
-def _clean_settings(raw: dict) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for key, value in (raw or {}).items():
-        key = str(key)
-        if key in _SKIP_OPTION_KEYS or not _OPTION_KEY_RE.match(key):
-            continue
-        if value is None:
-            continue
-        out[key] = str(value)[:256]
-    return out
-
-
 def _patch_settings_map(text: str, name: str, pairs: dict[str, str]) -> str:
-    if not pairs:
-        return text
+    """Replace the `Default::default()` initializer of a settings map.
+
+    Fails loudly when the initializer is not found exactly once — a
+    silently unpatched map would ship a client without its hard settings.
+    """
     pattern = re.compile(
-        rf"(pub static ref {name}: RwLock<HashMap<String, String>> = )[^;]+;"
+        rf"(pub static ref {name}: RwLock<HashMap<String, String>> = )"
+        r"Default::default\(\);"
     )
     literal = _rust_map_literal(pairs)
     new_text, count = pattern.subn(lambda m: m.group(1) + literal + ";", text)
     if count != 1:
-        print(f"warning: {name} initializer not patched ({count} matches)")
+        raise RuntimeError(
+            f"{name} initializer not found exactly once ({count} matches) "
+            "— upstream config.rs changed or the tree is already patched"
+        )
     return new_text
 
 
 def patch_default_settings(root: Path, config: dict) -> None:
-    """Bake profile settings into the client's compile-time setting maps.
+    """Bake ui["conn-type"] into the client's HARD_SETTINGS.
 
-    - ui["conn-type"] -> HARD_SETTINGS (the "appearance" switch: incoming =
-      support-client screen only, outgoing = remote-control input only).
-    - security + network + ui + presets + recording -> OVERWRITE_SETTINGS
-      (admin-enforced options the end user cannot change).
-    - display -> DEFAULT_DISPLAY_SETTINGS (defaults the user can change).
+    "incoming" renders the support-client screen (ID/password only),
+    "outgoing" the remote-control input only; absent = full client.
+    Any unrecognized value aborts the build rather than shipping a
+    client with the wrong appearance. Other setting groups are applied
+    separately — not here.
     """
-    config_rs = root / "libs" / "hbb_common" / "src" / "config.rs"
-    text = config_rs.read_text()
-
     ui = config.get("ui") or {}
     conn_type = ui.get("conn-type")
-    if conn_type and conn_type in _VALID_CONN_TYPES:
-        text = _patch_settings_map(text, "HARD_SETTINGS", {"conn-type": conn_type})
-    elif conn_type:
-        print(f"warning: ignoring invalid conn-type {conn_type!r}")
+    if not conn_type:
+        return
+    if conn_type not in _VALID_CONN_TYPES:
+        print(f"error: invalid conn-type {conn_type!r} — expected incoming|outgoing")
+        sys.exit(1)
 
-    overwrite: dict[str, str] = {}
-    for group in ("security", "network", "ui", "presets", "recording"):
-        overwrite.update(_clean_settings(config.get(group) or {}))
-    overwrite.pop("conn-type", None)
-    text = _patch_settings_map(text, "OVERWRITE_SETTINGS", overwrite)
-
-    display = _clean_settings(config.get("display") or {})
-    text = _patch_settings_map(text, "DEFAULT_DISPLAY_SETTINGS", display)
-
-    config_rs.write_text(text)
+    config_rs = root / "libs" / "hbb_common" / "src" / "config.rs"
+    text = config_rs.read_text(encoding="utf-8")
+    text = _patch_settings_map(text, "HARD_SETTINGS", {"conn-type": conn_type})
+    config_rs.write_text(text, encoding="utf-8")
 
 
 def patch_icons(root: Path, config: dict) -> None:
