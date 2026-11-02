@@ -30,6 +30,7 @@ env:
   VERSION: "${{ inputs.version }}"
   CALLBACK_URL: "${{ inputs.callback_url }}"
   CALLBACK_TOKEN: "${{ inputs.callback_token }}"
+  RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
 jobs:
   bridge:
@@ -45,7 +46,13 @@ jobs:
       - name: Report start
         shell: pwsh
         run: |
-          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; error_log="Build started on windows-2022"} | ConvertTo-Json)
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Job started on windows-2022"; run_id="${{ github.run_id }}"; external_url=$env:RUN_URL} | ConvertTo-Json)
+        continue-on-error: true
+
+      - name: Report progress
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Checking out sources and applying build configuration"} | ConvertTo-Json)
         continue-on-error: true
 
       - name: Export GitHub Actions cache environment variables
@@ -113,6 +120,12 @@ jobs:
         with:
           prefix-key: "windows-2022"
 
+      - name: Report progress
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Installing vcpkg dependencies — longest step"} | ConvertTo-Json)
+        continue-on-error: true
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -129,6 +142,12 @@ jobs:
             exit 1
           fi
 
+      - name: Report progress
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Installing Flutter"} | ConvertTo-Json)
+        continue-on-error: true
+
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -144,11 +163,23 @@ jobs:
           sed -i -e 's|2ded7f146437a761ffe6981e2f742038f85ca68d|08a471bb8ceccdd50483c81cdfa8b81b07b14b87|' ./flutter/pubspec.lock
           sed -i -e 's|2ded7f146437a761ffe6981e2f742038f85ca68d|08a471bb8ceccdd50483c81cdfa8b81b07b14b87|' ./flutter/pubspec.yaml
 
+      - name: Report progress
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Building RustDesk"} | ConvertTo-Json)
+        continue-on-error: true
+
       - name: Build RustDesk
         shell: pwsh
         run: |
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           mv .\flutter\build\windows\x64\runner\Release .\rustdesk
+
+      - name: Report progress
+        shell: pwsh
+        run: |
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Uploading artifact"} | ConvertTo-Json)
+        continue-on-error: true
 
       - name: Upload artifact
         id: upload
@@ -161,11 +192,11 @@ jobs:
         if: success()
         shell: pwsh
         run: |
-          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="success"; run_id="${{ github.run_id }}"; artifact_id="${{ steps.upload.outputs.artifact-id }}"; error_log="Windows build completed"} | ConvertTo-Json)
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="success"; run_id="${{ github.run_id }}"; artifact_id="${{ steps.upload.outputs.artifact-id }}"; external_url=$env:RUN_URL; detail="Done"; error_log="Windows build completed"} | ConvertTo-Json)
 
       - name: Report failure
         if: failure()
         shell: pwsh
         run: |
           $log = "Windows build failed. See GitHub Actions logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="failed"; run_id="${{ github.run_id }}"; error_log=$log} | ConvertTo-Json)
+          Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="failed"; run_id="${{ github.run_id }}"; external_url=$env:RUN_URL; detail="Failed"; error_log=$log} | ConvertTo-Json)
