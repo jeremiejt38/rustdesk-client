@@ -22,6 +22,8 @@ on:
         type: string
   repository_dispatch:
     types: [client-build]
+  push:
+    branches: [build/**]
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -30,6 +32,7 @@ env:
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VERSION: "${{ inputs.version || github.event.client_payload.version }}"
+  ZIP_URL: "${{ inputs.zip_url || github.event.client_payload.zip_url }}"
   CALLBACK_URL: "${{ inputs.callback_url || github.event.client_payload.callback_url }}"
   CALLBACK_TOKEN: "${{ inputs.callback_token || github.event.client_payload.callback_token }}"
   RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -45,6 +48,20 @@ jobs:
     strategy:
       fail-fast: false
     steps:
+      - name: Checkout build request
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+
+      - name: Load build request
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $req = Get-Content build-request.json -Raw | ConvertFrom-Json
+          "VERSION=$($req.version)" | Add-Content $env:GITHUB_ENV
+          "ZIP_URL=$($req.zip_url)" | Add-Content $env:GITHUB_ENV
+          "CALLBACK_URL=$($req.callback_url)" | Add-Content $env:GITHUB_ENV
+          "CALLBACK_TOKEN=$($req.callback_token)" | Add-Content $env:GITHUB_ENV
+
       - name: Report start
         shell: pwsh
         run: |
@@ -67,7 +84,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.version || github.event.client_payload.version }}
+          ref: ${{ env.VERSION }}
           submodules: recursive
 
       - name: Download bridge artifact
@@ -80,7 +97,7 @@ jobs:
         shell: pwsh
         run: |
           $zipPath = "$env:RUNNER_TEMP\secrets.zip"
-          Invoke-WebRequest -Uri "${{ inputs.zip_url || github.event.client_payload.zip_url }}" -OutFile $zipPath
+          Invoke-WebRequest -Uri "$env:ZIP_URL" -OutFile $zipPath
           Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\secrets"
           Get-ChildItem "$env:RUNNER_TEMP\secrets"
 
