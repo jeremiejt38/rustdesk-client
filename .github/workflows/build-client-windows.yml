@@ -20,6 +20,8 @@ on:
         description: 'Secret token for the callback endpoint'
         required: true
         type: string
+  repository_dispatch:
+    types: [client-build]
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -27,9 +29,9 @@ env:
   LLVM_VERSION: "15.0.6"
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VERSION: "${{ inputs.version }}"
-  CALLBACK_URL: "${{ inputs.callback_url }}"
-  CALLBACK_TOKEN: "${{ inputs.callback_token }}"
+  VERSION: "${{ inputs.version || github.event.client_payload.version }}"
+  CALLBACK_URL: "${{ inputs.callback_url || github.event.client_payload.callback_url }}"
+  CALLBACK_TOKEN: "${{ inputs.callback_token || github.event.client_payload.callback_token }}"
   RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
 jobs:
@@ -65,7 +67,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.version }}
+          ref: ${{ inputs.version || github.event.client_payload.version }}
           submodules: recursive
 
       - name: Download bridge artifact
@@ -78,7 +80,7 @@ jobs:
         shell: pwsh
         run: |
           $zipPath = "$env:RUNNER_TEMP\secrets.zip"
-          Invoke-WebRequest -Uri "${{ inputs.zip_url }}" -OutFile $zipPath
+          Invoke-WebRequest -Uri "${{ inputs.zip_url || github.event.client_payload.zip_url }}" -OutFile $zipPath
           Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\secrets"
           Get-ChildItem "$env:RUNNER_TEMP\secrets"
 
