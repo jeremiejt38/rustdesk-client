@@ -206,7 +206,7 @@ jobs:
           Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -Headers @{ "X-Callback-Token" = $env:CALLBACK_TOKEN } -ContentType "application/json" -Body (@{status="running"; detail="Building MSI installer"} | ConvertTo-Json) | Out-Null
           pushd ./res/msi
           python preprocess.py --arp -d ../../rustdesk
-          nuget restore msi.sln
+          msbuild msi.sln -t:Restore
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
           if (-not $msi) { throw "Package.msi not found" }
